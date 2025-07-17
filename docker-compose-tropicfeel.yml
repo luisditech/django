@@ -1,0 +1,118 @@
+services:
+  db:
+    image: postgres
+    restart: always
+    environment:
+      POSTGRES_DB: tropicfeel_db
+      POSTGRES_USER: tropicfeel_user
+      POSTGRES_PASSWORD: 123456789
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - tropicfeel_net
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "tropicfeel_user" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6378:6379"
+    restart: always
+    networks:
+      - tropicfeel_net
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  migrator:
+    build:
+      context: .
+    env_file: ./.env
+    command: >
+      sh -c "
+        python manage.py migrate --settings=orquestador.settings.tropicfeel &&
+        python manage.py migrate django_celery_beat --settings=orquestador.settings.tropicfeel"
+    volumes:
+      - .:/code
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tropicfeel_net
+
+  web:
+    build:
+      context: .
+    env_file: ./.env
+    command: >
+      sh -c "python manage.py runserver 0.0.0.0:8000 --settings=orquestador.settings.tropicfeel"
+    volumes:
+      - .:/code
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    networks:
+      - tropicfeel_net
+
+  worker:
+    build:
+      context: .
+    env_file: ./.env
+    command: >
+      sh -c "celery -A orquestador worker -l info"
+    volumes:
+      - .:/code
+    environment:
+      - DJANGO_SETTINGS_MODULE=orquestador.settings.tropicfeel
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    networks:
+      - tropicfeel_net
+
+  beat:
+    build:
+      context: .
+    env_file: ./.env
+    command: >
+      sh -c "celery -A orquestador beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+    volumes:
+      - .:/code
+    environment:
+      - DJANGO_SETTINGS_MODULE=orquestador.settings.tropicfeel
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    networks:
+      - tropicfeel_net
+
+volumes:
+  pgdata:
+
+networks:
+  tropicfeel_net:
+    driver: bridge

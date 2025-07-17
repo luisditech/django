@@ -1,0 +1,67 @@
+resources:
+  repositories:
+    - repository: devops
+      type: git
+      name: devops
+      ref: refs/heads/main
+
+trigger:
+  branches:
+    include:
+      - 'tropicfeel-dev'
+      - 'tropicfeel-qa'
+      - 'tropicfeel-prd'
+
+
+variables:
+  - name: appName
+    value: ${{ split(replace(variables['Build.SourceBranchName'], '/', ''), '-')[0] }}
+
+  - name: env
+    value: ${{ split(replace(variables['Build.SourceBranchName'], '/', ''), '-')[1] }}
+
+  - name: agentPool
+    ${{ if and(eq(variables['appName'], 'tropicfeel'), eq(variables['env'], 'dev')) }}:
+      value: Tropicfeel DEV
+    ${{ if and(eq(variables['appName'], 'tropicfeel'), eq(variables['env'], 'qa')) }}:
+      value: Tropicfeel QA
+    ${{ if and(eq(variables['appName'], 'tropicfeel'), eq(variables['env'], 'prod')) }}:
+      value: Tropicfeel PRD
+
+stages:
+  - stage: Sonar
+    displayName: "Code Analysis with SonarCloud"
+    condition: or(eq(variables['env'], 'prd'), eq(variables['env'], 'prd'))
+    jobs:
+      - job: AnalyzeCode
+        displayName: "Run SonarCloud Analysis"
+        pool:
+          name: ${{ variables.agentPool }}
+        variables:
+          - group: env-${{ variables.appName }}-${{ variables.env }}
+        steps:
+          - template: templates/sonarcloud-analysis.yml@devops
+            parameters:
+              appName: ${{ variables.appName }}
+              env: ${{ variables.env }}
+  - stage: Deploy
+    displayName: "Deploy ${{ variables.appName }} - ${{ variables.env }}"
+    condition: or(eq(variables['env'], 'dev'), eq(variables['env'], 'qa'), eq(variables['env'], 'prd'))
+    jobs:
+      - deployment: DeployApp
+        displayName: "Deploy orquestador - ${{ variables.appName }}"
+        environment: ${{ format('{0}-{1}', variables.appName, variables.env) }}
+        pool:
+          name: ${{ variables.agentPool }}
+        variables:
+          - group: env-${{ variables.appName }}-${{ variables.env }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - template: jobs/deploy-django.yml@devops
+                  parameters:
+                    appName: ${{ variables.appName }}
+                    env: ${{ variables.env }}
+                    djangoSettings: orquestador.settings.${{ variables.appName }}
